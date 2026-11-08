@@ -198,18 +198,21 @@ export type Database = {
         Row: {
           expires_at: string
           plan: string
+          requests_per_day: number | null
           updated_at: string
           user_id: string
         }
         Insert: {
           expires_at: string
           plan: string
+          requests_per_day?: number | null
           updated_at?: string
           user_id: string
         }
         Update: {
           expires_at?: string
           plan?: string
+          requests_per_day?: number | null
           updated_at?: string
           user_id?: string
         }
@@ -374,6 +377,7 @@ export type Database = {
           plan: string
           razorpay_order_id: string
           razorpay_payment_id: string | null
+          requests_per_day: number | null
           status: string
           updated_at: string
           user_id: string
@@ -393,6 +397,7 @@ export type Database = {
           plan: string
           razorpay_order_id: string
           razorpay_payment_id?: string | null
+          requests_per_day?: number | null
           status?: string
           updated_at?: string
           user_id: string
@@ -412,6 +417,7 @@ export type Database = {
           plan?: string
           razorpay_order_id?: string
           razorpay_payment_id?: string | null
+          requests_per_day?: number | null
           status?: string
           updated_at?: string
           user_id?: string
@@ -620,6 +626,10 @@ export type Database = {
       apply_verified_payment: {
         Args: { _order_id: string; _payment_id: string; _via: string }
         Returns: string
+      }
+      reserve_ai_request: {
+        Args: { _kind: string; _model: string; _user_id: string }
+        Returns: Json
       }
       revoke_refunded_payment: {
         Args: { _payment_id: string }
