@@ -20,23 +20,31 @@ export const Route = createFileRoute("/api/public/razorpay-webhook")({
         const eventId = request.headers.get("x-razorpay-event-id");
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-        if (eventId) {
-          const { error: dup } = await supabaseAdmin.from("payment_webhook_events").insert({ event_id: eventId.slice(0, 100), event: event.slice(0, 60) });
-          if (dup) return new Response("Duplicate", { status: 200 });
-        }
-
+        // Activation/refund functions are atomic and idempotent. Record events
+        // only after successful processing, so transient failures remain retryable.
         const pay = body.payload?.payment?.entity;
         if (event === "payment.captured" && pay) {
-          const { data: row } = await supabaseAdmin.from("payments").select("amount_paise, currency").eq("razorpay_order_id", pay.order_id).maybeSingle();
-          if (row && row.amount_paise === pay.amount && row.currency === pay.currency && pay.status === "captured")
-            await supabaseAdmin.rpc("apply_verified_payment", { _order_id: pay.order_id, _payment_id: pay.id, _via: "webhook" });
+          const { data: row, error: lookupError } = await supabaseAdmin.from("payments").select("amount_paise, currency").eq("razorpay_order_id", pay.order_id).maybeSingle();
+          if (lookupError) return new Response("Retry", { status: 503 });
+          if (row && row.amount_paise === pay.amount && row.currency === pay.currency && pay.status === "captured") {
+            const { error, data: result } = await supabaseAdmin.rpc("apply_verified_payment", { _order_id: pay.order_id, _payment_id: pay.id, _via: "webhook" });
+            if (error || result === "invalid_order") return new Response("Retry", { status: 503 });
+          }
         } else if (event === "payment.failed" && pay) {
           // Only marks orders that never succeeded; out-of-order events can't undo a payment.
-          await supabaseAdmin.from("payments").update({ status: "failed", failure_reason: (pay.error_description ?? "Payment failed").slice(0, 200), updated_at: new Date().toISOString() })
+          const { error } = await supabaseAdmin.from("payments").update({ status: "failed", failure_reason: (pay.error_description ?? "Payment failed").slice(0, 200), updated_at: new Date().toISOString() })
             .eq("razorpay_order_id", pay.order_id).eq("status", "created");
+          if (error) return new Response("Retry", { status: 503 });
         } else if (event === "refund.processed") {
           const pid = body.payload?.refund?.entity?.payment_id;
-          if (pid) await supabaseAdmin.rpc("revoke_refunded_payment", { _payment_id: pid });
+          if (pid) {
+            const { error } = await supabaseAdmin.rpc("revoke_refunded_payment", { _payment_id: pid });
+            if (error) return new Response("Retry", { status: 503 });
+          }
+        }
+        if (eventId) {
+          const { error } = await supabaseAdmin.from("payment_webhook_events").insert({ event_id: eventId.slice(0, 100), event: event.slice(0, 60) });
+          if (error && error.code !== "23505") return new Response("Retry", { status: 503 });
         }
         return new Response("ok", { status: 200 });
       },
