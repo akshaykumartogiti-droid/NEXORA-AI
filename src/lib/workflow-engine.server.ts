@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database } from "@/integrations/supabase/types";
 import { NODE_TYPES, WORKFLOW_LIMITS, applyTransform, type WfDefinition, type WfNode } from "@/lib/workflows";
+import { reserveUsage, finishUsage } from "@/lib/usage.server";
 
 export type Step = { node_id: string; type: string; label: string; status: "ok" | "failed" | "skipped" | "stopped"; output?: string; error?: string };
 
@@ -31,7 +32,9 @@ export async function executeWorkflow(
     if (cur?.status === "cancelled") return { runId: runId, status: "cancelled" };
     if (steps.length >= WORKFLOW_LIMITS.maxNodes) return finish("failed", { error: "Step limit reached." });
 
-    const { node, input } = queue.shift()!;
+    const nextItem = queue.shift();
+    if (!nextItem) break;
+    const { node, input } = nextItem;
     const label = NODE_TYPES[node.type].label;
     let out = input;
     let branch: "yes" | "no" | null = null;
@@ -64,6 +67,7 @@ export async function executeWorkflow(
           const { createOpenAI } = await import("@ai-sdk/openai");
           const { streamText } = await import("ai");
           const { AI_MODEL } = await import("@/lib/chat.server");
+          const usageId = await reserveUsage(userId, "workflow", AI_MODEL);
           const provider = createOpenAI({ baseURL: "https://ai.gateway.lovable.dev/v1", apiKey, headers: { "Lovable-API-Key": apiKey, "X-Lovable-AIG-SDK": "vercel-ai-sdk" } });
           const result = streamText({
             model: provider.responses(AI_MODEL),
@@ -75,10 +79,11 @@ export async function executeWorkflow(
           try {
             out = (await result.text).trim();
           } catch {
+            await finishUsage(usageId, "error");
             throw new Error("The AI request failed (it may be rate limited or out of credits).");
           }
           const usage = await result.totalUsage;
-          await supabase.from("usage_records").insert({ user_id: userId, kind: "workflow", model: AI_MODEL, input_tokens: usage.inputTokens ?? 0, output_tokens: usage.outputTokens ?? 0, status: "ok" });
+          await finishUsage(usageId, "ok", usage);
           if (!out) throw new Error("The AI returned no text.");
           break;
         }

@@ -2,12 +2,12 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { PLANS } from "@/lib/billing";
+import { PLANS, PAID_PLAN_IDS } from "@/lib/billing";
 
 // Creates a Razorpay order for a plan. The price comes only from server config.
 export const createCheckoutOrder = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) => z.object({ plan: z.literal("pro") }).parse(d))
+  .inputValidator((d: unknown) => z.object({ plan: z.enum(PAID_PLAN_IDS) }).parse(d))
   .handler(async ({ data, context }) => {
     const { razorpayApi, razorpayConfig } = await import("@/lib/razorpay.server");
     const cfg = razorpayConfig();
@@ -18,7 +18,7 @@ export const createCheckoutOrder = createServerFn({ method: "POST" })
     // Limit abandoned orders: max 10 unpaid orders per user per hour.
     const { count } = await supabaseAdmin.from("payments").select("id", { count: "exact", head: true })
       .eq("user_id", context.userId).eq("status", "created").gte("created_at", new Date(Date.now() - 3_600_000).toISOString());
-    if ((count ?? 0) >= 10) return { ok: false as const, error: "Too many checkout attempts. Please wait a while and try again." };
+    if (count == null || count >= 10) return { ok: false as const, error: "Checkout is temporarily unavailable. Please wait a while and try again." };
 
     const order = await razorpayApi<{ id: string; amount: number; currency: string }>("/orders", {
       method: "POST",
@@ -26,7 +26,7 @@ export const createCheckoutOrder = createServerFn({ method: "POST" })
     });
     const { error } = await supabaseAdmin.from("payments").insert({
       user_id: context.userId, plan: data.plan, amount_paise: plan.amountPaise, currency: plan.currency,
-      period_days: plan.periodDays, mode: cfg.mode, razorpay_order_id: order.id,
+      period_days: plan.periodDays, requests_per_day: plan.requestsPerDay, mode: cfg.mode, razorpay_order_id: order.id,
     });
     if (error) return { ok: false as const, error: "Could not start checkout. Please try again." };
     return { ok: true as const, keyId: cfg.keyId, orderId: order.id, amount: order.amount, currency: order.currency, mode: cfg.mode, email: (context.claims as { email?: string }).email ?? "" };
@@ -54,6 +54,7 @@ export const verifyCheckoutPayment = createServerFn({ method: "POST" })
     const { data: pay } = await supabaseAdmin.from("payments").select("user_id, amount_paise, currency, status, entitlement_applied_at")
       .eq("razorpay_order_id", data.orderId).maybeSingle();
     if (!pay || pay.user_id !== context.userId) return { ok: false as const, error: "Payment could not be verified." };
+    if (pay.status === "refunded") return { ok: false as const, error: "This payment has been refunded." };
     if (pay.entitlement_applied_at) return { ok: true as const, status: "already_applied" };
 
     let rp = await razorpayApi<{ id: string; order_id: string; amount: number; currency: string; status: string }>(`/payments/${encodeURIComponent(data.paymentId)}`);
@@ -66,7 +67,7 @@ export const verifyCheckoutPayment = createServerFn({ method: "POST" })
     if (rp.status !== "captured") return { ok: false as const, error: "Payment is not complete yet. If money was deducted, it will be confirmed shortly." };
 
     const { data: res, error } = await supabaseAdmin.rpc("apply_verified_payment", { _order_id: data.orderId, _payment_id: data.paymentId, _via: "checkout" });
-    if (error) return { ok: false as const, error: "Payment received but activation failed. It will be retried automatically." };
+    if (error || (res !== "applied" && res !== "already_applied")) return { ok: false as const, error: "Payment received but activation failed. Please refresh your payments shortly." };
     return { ok: true as const, status: res as string };
   });
 

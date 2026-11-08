@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { PageHeader } from "@/components/app/page";
 import { supabase } from "@/integrations/supabase/client";
-import { dailyLimitFor } from "@/lib/billing";
+import { dailyLimitFor, usageDayStart } from "@/lib/billing";
 
 export const Route = createFileRoute("/_authenticated/app/usage")({ component: Usage });
 
@@ -19,18 +19,19 @@ function Usage() {
   });
   const { data: ent } = useQuery({
     queryKey: ["entitlement"],
-    queryFn: async () => (await supabase.from("entitlements").select("plan, expires_at").maybeSingle()).data,
+    queryFn: async () => (await supabase.from("entitlements").select("plan, expires_at, requests_per_day").maybeSingle()).data,
   });
+  const { data: dailyCount } = useQuery({ queryKey: ["usage", "today", usageDayStart().toISOString()], queryFn: async () => { const { count, error } = await supabase.from("usage_records").select("id", { count: "exact", head: true }).gte("created_at", usageDayStart().toISOString()); if (error) throw error; return count ?? 0; } });
   const rows = data ?? [];
-  const dayAgo = Date.now() - 86_400_000;
-  const today = rows.filter((r) => new Date(r.created_at).getTime() > dayAgo).length;
+  const dayAgo = usageDayStart().getTime();
+  const today = rows.filter((r) => new Date(r.created_at).getTime() >= dayAgo).length;
   const tokensIn = rows.reduce((s, r) => s + r.input_tokens, 0);
   const tokensOut = rows.reduce((s, r) => s + r.output_tokens, 0);
   return (
     <div>
       <PageHeader title="Usage" description="Measured from real AI responses. Cost estimates are not shown because exact per-token pricing isn't available to the app." />
       <div className="grid gap-4 p-6 sm:grid-cols-3">
-        <Stat label="Requests in last 24h" value={`${today} / ${dailyLimitFor(ent)}`} />
+        <Stat label="Requests today (India time)" value={`${dailyCount ?? today} / ${dailyLimitFor(ent)}`} />
         <Stat label="Input tokens (30 days)" value={tokensIn.toLocaleString()} />
         <Stat label="Output tokens (30 days)" value={tokensOut.toLocaleString()} />
       </div>

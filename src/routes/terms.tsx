@@ -21,7 +21,7 @@ export const Route = createFileRoute("/terms")({
         <div className="mt-6 space-y-4 text-muted-foreground">
           <p>NEXORA AI is provided as-is during early access. AI output can be wrong; verify important results.</p>
           <p>Do not use the service for unlawful activity or to abuse its AI limits.</p>
-          <p>Plans shown on the pricing page are illustrative; no paid subscription is currently offered.</p>
+          <p>Paid plans activate only after payment verification and remain valid for 30 days from activation. A new purchase replaces the current plan and starts a new 30-day period. Payments do not auto-renew. Daily AI allowances reset at midnight India time.</p>
         </div>
       </article>
     </PublicLayout>

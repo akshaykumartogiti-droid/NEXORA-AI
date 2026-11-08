@@ -5,8 +5,8 @@ import { convertToModelMessages, isStepCount, streamText, type UIMessage } from 
 import { buildAgentTools, MAX_AGENT_STEPS } from "@/lib/agent-tools.server";
 
 import type { Database } from "@/integrations/supabase/types";
-import { AI_LIMITS, checkRate } from "@/lib/limits";
-import { dailyLimitFor } from "@/lib/billing";
+import { AI_LIMITS } from "@/lib/limits";
+import { reserveUsage, finishUsage } from "@/lib/usage.server";
 
 // Centralised AI configuration. Change the model here.
 export const AI_MODEL = "openai/gpt-6-astra";
@@ -83,16 +83,6 @@ export async function handleChat(request: Request): Promise<Response> {
     .maybeSingle();
   if (!convo) return json(404, "Conversation not found.");
 
-  // Server-side rate limits.
-  const now = Date.now();
-  const [{ count: minute }, { count: day }, { data: ent }] = await Promise.all([
-    supabase.from("usage_records").select("id", { count: "exact", head: true }).eq("user_id", user.id).gte("created_at", new Date(now - 60_000).toISOString()),
-    supabase.from("usage_records").select("id", { count: "exact", head: true }).eq("user_id", user.id).gte("created_at", new Date(now - 86_400_000).toISOString()),
-    supabase.from("entitlements").select("plan, expires_at").eq("user_id", user.id).maybeSingle(),
-  ]);
-  const rate = checkRate(minute ?? 0, day ?? 0, dailyLimitFor(ent));
-  if (!rate.ok) return json(429, rate.reason);
-
   const apiKey = process.env["LOVABLE_API_KEY"];
   if (!apiKey) return json(500, "AI is not configured on the server.");
 
@@ -133,6 +123,9 @@ export async function handleChat(request: Request): Promise<Response> {
     .select("id")
     .single();
   const agentRunId = run?.id ?? null;
+  let usageId: string;
+  try { usageId = await reserveUsage(user.id, "chat", AI_MODEL); }
+  catch (error) { return json(429, error instanceof Error ? error.message : "AI allowance unavailable."); }
   const finishRun = async (status: "completed" | "failed" | "cancelled", extra: { summary?: string; error?: string } = {}) => {
     if (!agentRunId) return;
     await supabase.from("agent_runs").update({ status, finished_at: new Date().toISOString(), ...extra }).eq("id", agentRunId).eq("status", "running");
@@ -164,23 +157,17 @@ export async function handleChat(request: Request): Promise<Response> {
     },
     onAbort: async () => {
       await finishRun("cancelled", { summary: "Stopped by user." });
+      await finishUsage(usageId, "cancelled");
     },
     onFinish: async ({ totalUsage: usage, text, steps }) => {
       const toolCount = steps.reduce((n, s) => n + s.toolCalls.length, 0);
       await finishRun("completed", { summary: `${toolCount} tool call(s). ${text.slice(0, 400)}` });
-      await supabase.from("usage_records").insert({
-        user_id: user.id,
-        kind: "chat",
-        model: AI_MODEL,
-        input_tokens: usage.inputTokens ?? 0,
-        output_tokens: usage.outputTokens ?? 0,
-        status: "ok",
-      });
+      await finishUsage(usageId, "ok", usage);
     },
     onError: async ({ error }) => {
       console.error("AI stream error", error instanceof Error ? error.message : "unknown");
       await finishRun("failed", { error: "The AI request failed." });
-      await supabase.from("usage_records").insert({ user_id: user.id, kind: "chat", model: AI_MODEL, status: "error" });
+      await finishUsage(usageId, "error");
     },
   });
 

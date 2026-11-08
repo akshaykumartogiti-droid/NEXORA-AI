@@ -8,9 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { lovable } from "@/integrations/lovable";
+import { PAID_PLAN_IDS } from "@/lib/billing";
 import { supabase } from "@/integrations/supabase/client";
 
-const searchSchema = z.object({ mode: z.enum(["signin", "signup", "forgot"]).optional() });
+const searchSchema = z.object({ mode: z.enum(["signin", "signup", "forgot"]).optional(), plan: z.enum(PAID_PLAN_IDS).optional() });
 
 export const Route = createFileRoute("/auth")({
   validateSearch: searchSchema,
@@ -26,7 +27,7 @@ export const Route = createFileRoute("/auth")({
 });
 
 function AuthPage() {
-  const { mode = "signin" } = Route.useSearch();
+  const { mode = "signin", plan } = Route.useSearch();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,9 +37,9 @@ function AuthPage() {
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
-      if (data.user) navigate({ to: "/app", replace: true });
+      if (data.user) navigate(plan ? { to: "/app/billing", search: { plan }, replace: true } : { to: "/app", replace: true });
     });
-  }, [navigate]);
+  }, [navigate, plan]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,7 +54,7 @@ function AuthPage() {
           options: { emailRedirectTo: window.location.origin + "/app", data: { display_name: name.slice(0, 80) } },
         });
         if (error) throw error;
-        if (data.session) navigate({ to: "/app" });
+        if (data.session) navigate(plan ? { to: "/app/billing", search: { plan } } : { to: "/app" });
         else setNotice("Check your email to confirm your account, then sign in.");
       } else if (mode === "forgot") {
         const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + "/reset-password" });
@@ -62,7 +63,7 @@ function AuthPage() {
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        navigate({ to: "/app" });
+        navigate(plan ? { to: "/app/billing", search: { plan } } : { to: "/app" });
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Something went wrong");
@@ -72,13 +73,13 @@ function AuthPage() {
   };
 
   const google = async () => {
-    const result = await lovable.auth.signInWithOAuth("google", { redirect_uri: window.location.origin + "/auth" });
+    const result = await lovable.auth.signInWithOAuth("google", { redirect_uri: window.location.origin + "/auth" + (plan ? `?plan=${plan}` : "") });
     if (result.error) {
       toast.error("Google sign-in failed");
       return;
     }
     if (result.redirected) return;
-    navigate({ to: "/app" });
+    navigate(plan ? { to: "/app/billing", search: { plan } } : { to: "/app" });
   };
 
   const title = mode === "signup" ? "Create your account" : mode === "forgot" ? "Reset your password" : "Welcome back";
@@ -119,12 +120,12 @@ function AuthPage() {
         <div className="mt-6 space-y-1 text-center text-sm text-muted-foreground">
           {mode === "signin" && (
             <>
-              <p><Link to="/auth" search={{ mode: "forgot" }} className="hover:text-foreground">Forgot password?</Link></p>
-              <p>New here? <Link to="/auth" search={{ mode: "signup" }} className="text-primary">Create an account</Link></p>
+              <p><Link to="/auth" search={{ mode: "forgot", plan }} className="hover:text-foreground">Forgot password?</Link></p>
+              <p>New here? <Link to="/auth" search={{ mode: "signup", plan }} className="text-primary">Create an account</Link></p>
             </>
           )}
           {mode !== "signin" && (
-            <p>Have an account? <Link to="/auth" search={{ mode: "signin" }} className="text-primary">Sign in</Link></p>
+            <p>Have an account? <Link to="/auth" search={{ mode: "signin", plan }} className="text-primary">Sign in</Link></p>
           )}
         </div>
       </div>
