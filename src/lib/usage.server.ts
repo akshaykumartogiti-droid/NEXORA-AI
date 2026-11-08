@@ -9,7 +9,7 @@ export async function reserveUsage(userId: string, kind: "chat" | "workflow", mo
   return result.id;
 }
 
-export async function finishUsage(id: string, status: string, usage?: { inputTokens?: number; outputTokens?: number }) {
+export async function finishUsage(id: string, status: string, usage?: { inputTokens?: number | undefined; outputTokens?: number | undefined }) {
   const { error } = await supabaseAdmin.from("usage_records").update({ status, input_tokens: usage?.inputTokens ?? 0, output_tokens: usage?.outputTokens ?? 0 }).eq("id", id);
   if (error) console.error("Could not update AI usage outcome");
 }
