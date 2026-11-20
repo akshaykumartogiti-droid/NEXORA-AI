@@ -1,4 +1,5 @@
-# Remix of Project Memory Hub
+# NEXORA AI
+
 
 Project Context, Instructions, and Persistent Memory Management
 
